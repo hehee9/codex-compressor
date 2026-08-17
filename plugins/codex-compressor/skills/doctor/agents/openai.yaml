@@ -1,0 +1,7 @@
+interface:
+  display_name: "codex-compressor 진단"
+  short_description: "버전과 권한 및 후크 기능을 진단합니다."
+  default_prompt: "codex-compressor 설치를 진단해줘"
+policy:
+  allow_implicit_invocation: false
+

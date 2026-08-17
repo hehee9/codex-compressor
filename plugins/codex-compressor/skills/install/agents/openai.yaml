@@ -1,0 +1,7 @@
+interface:
+  display_name: "codex-compressor 설치"
+  short_description: "설정을 보존하며 codex-compressor를 설치합니다."
+  default_prompt: "codex-compressor를 안전하게 설치해줘"
+policy:
+  allow_implicit_invocation: false
+

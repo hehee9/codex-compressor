@@ -1,0 +1,37 @@
+{
+  "name": "codex-compressor",
+  "version": "0.1.0",
+  "description": "Codex 컨텍스트 버퍼를 원래 설정을 보존하면서 관리하는 플러그인",
+  "author": {
+    "name": "hehee9"
+  },
+  "homepage": "https://github.com/hehee9/codex-compressor",
+  "repository": "https://github.com/hehee9/codex-compressor",
+  "license": "Apache-2.0",
+  "keywords": [
+    "codex",
+    "context",
+    "configuration",
+    "buffer",
+    "diagnostics"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "codex-compressor",
+    "shortDescription": "Codex 컨텍스트 버퍼 설정을 안전하게 관리합니다",
+    "longDescription": "기존 Codex 설정과 사용자 편집 내용을 보존하고, 필요한 버퍼 설정을 설치·검사·복원·제거합니다.",
+    "developerName": "hehee9",
+    "category": "Productivity",
+    "capabilities": [
+      "Read local Codex configuration",
+      "Write local Codex configuration",
+      "Run diagnostics"
+    ],
+    "defaultPrompt": [
+      "Codex 설정을 검사하고 상태를 알려줘",
+      "codex-compressor 설치 상태를 진단해줘",
+      "설정을 백업한 뒤 버퍼 설정을 설치해줘"
+    ],
+    "brandColor": "#4F46E5"
+  }
+}

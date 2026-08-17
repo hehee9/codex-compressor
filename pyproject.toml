@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-compressor"
+version = "0.1.0"
+description = "Codex 컨텍스트 버퍼를 설정 보존 방식으로 관리하는 표준 라이브러리 도구"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "hehee9" }]
+keywords = ["codex", "configuration", "context", "buffer", "plugin"]
+classifiers = [
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.scripts]
+codex-compressor = "codex_compressor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

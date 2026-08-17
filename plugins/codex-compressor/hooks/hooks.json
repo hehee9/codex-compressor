@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "^new_context$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
+            "timeout": 5,
+            "statusMessage": "롤오버 체크포인트 확인"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "^(auto|manual)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
+            "timeout": 5,
+            "statusMessage": "롤오버 체크포인트 저장"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "^(auto|manual)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
+            "timeout": 5,
+            "statusMessage": "롤오버 체크포인트 복원"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "^compact$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
+            "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
+            "timeout": 5,
+            "statusMessage": "롤오버 체크포인트 주입"
+          }
+        ]
+      }
+    ]
+  }
+}

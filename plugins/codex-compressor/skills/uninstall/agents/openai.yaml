@@ -1,0 +1,7 @@
+interface:
+  display_name: "codex-compressor 제거"
+  short_description: "설정을 안전하게 정리하고 백업을 보존합니다."
+  default_prompt: "codex-compressor를 제거하고 백업을 보존해줘"
+policy:
+  allow_implicit_invocation: false
+

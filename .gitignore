@@ -1,0 +1,34 @@
+# Python cache, test, and coverage output
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Packaging and virtual environments
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Local Codex state and release scratch files
+.codex-local/
+.codex-backup/
+.codex-validator-source/
+release/
+
+# Operating-system/editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
