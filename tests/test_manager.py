@@ -68,6 +68,22 @@ class ManagerTests(unittest.TestCase):
         self.assertFalse(self.home.joinpath("hooks.json").exists())
         self.assertFalse(self.manager.state_path.exists())
 
+    def test_uninstall_retains_star_marker_unless_purged(self) -> None:
+        self.manager.install("standalone")
+        marker = self.manager.runtime_root / ".star-prompted"
+        marker.touch()
+
+        self.assertTrue(self.manager.uninstall()["ok"])
+        self.assertTrue(marker.exists())
+
+        self.manager.install("standalone")
+        self.assertTrue(self.manager.uninstall(purge_state=True)["ok"])
+        self.assertFalse(marker.exists())
+
+        marker.touch()
+        self.assertTrue(self.manager.uninstall(purge_state=True)["ok"])
+        self.assertFalse(marker.exists())
+
     def test_trust_approval_is_detected_and_survives_reinstall(self) -> None:
         self.manager.install("standalone")
         config = self.home / "config.toml"

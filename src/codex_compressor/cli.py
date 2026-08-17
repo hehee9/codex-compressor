@@ -7,6 +7,7 @@ import json
 import sys
 from typing import Sequence
 
+from .github_star import _maybe_prompt_for_star
 from .manager import Manager, ManagerError, VERSION
 
 
@@ -67,13 +68,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 replace_token_budget=args.replace_token_budget,
             )
             _print_result(result, False)
+            if result.get("ok") is True:
+                _maybe_prompt_for_star(manager.codex_home, stdin=sys.stdin, stdout=sys.stdout)
             return 0
         manager = Manager(codex_home=args.codex_home)
         if args.command == "status":
             _print_result(manager.status(), args.as_json)
             return 0
         if args.command == "doctor":
-            _print_result(manager.doctor(live_probe=args.live_probe), args.as_json)
+            result = manager.doctor(live_probe=args.live_probe)
+            _print_result(result, args.as_json)
+            if (
+                not args.as_json
+                and result.get("installed") is True
+                and result.get("configured") is True
+            ):
+                _maybe_prompt_for_star(manager.codex_home, stdin=sys.stdin, stdout=sys.stdout)
             return 0
         if args.command == "uninstall":
             _print_result(manager.uninstall(purge_state=args.purge_state), False)

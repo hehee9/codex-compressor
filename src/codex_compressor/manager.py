@@ -31,7 +31,7 @@ from .configuration import (
 )
 
 
-VERSION = "0.1.0"
+VERSION = "1.0.0"
 HOOK_EVENTS = ("PreToolUse", "PreCompact", "PostCompact", "SessionStart")
 CONTINUITY_RELATIVE = Path("codex_compressor") / "continuity.py"
 
@@ -156,6 +156,7 @@ class Manager:
             else Path(__file__).resolve().parents[2]
         )
         self.runtime_root = self.codex_home / "codex-compressor"
+        self._star_prompt_marker = self.runtime_root / ".star-prompted"
         self.config_path = self.codex_home / "config.toml"
         self.hooks_path = self.codex_home / "hooks.json"
         self.state_path = self.runtime_root / "state.json"
@@ -744,6 +745,8 @@ class Manager:
 
         state = self._state()
         if state is None:
+            if purge_state:
+                self._star_prompt_marker.unlink(missing_ok=True)
             return {"ok": True, "installed": False, "conflicts": []}
         config_snapshot = _read_snapshot(self.config_path)
         hooks_snapshot = _read_snapshot(self.hooks_path)
@@ -841,6 +844,7 @@ class Manager:
             continuity = self.codex_home / "continuity"
             if continuity.exists():
                 shutil.rmtree(continuity)
+            self._star_prompt_marker.unlink(missing_ok=True)
         return {
             "ok": normal_cleanup,
             "installed": True,

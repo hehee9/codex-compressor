@@ -2,9 +2,9 @@
 
 [한국어](README_ko.md)
 
-![Codex Compressor breaks the read, compact, and reread loop with a validated handoff.](assets/codex-compressor-hero-en.png)
+![Codex Compressor breaks the infinite compaction loop with a handoff.](assets/codex-compressor-hero-en.png)
 
-**Break Codex's `read → compact → reread` loop on long-running tasks.**
+**Break Codex's infinite `read → compact → reread` loop on long-running tasks.**
 
 ## Why
 
@@ -12,13 +12,17 @@
 
 > Shortened history → Omitted details → Reread files and reconstruct decisions → Compact again
 
+→ Tasks that outlast the interval between compactions enter an **infinite loop**
+
 **Codex Compressor**
 
-> Validated cumulative handoff → Fresh context window → Resume from the exact next action
+> Handoff → Fresh context window → Resume from the exact next action
 
 - Creates a visible cumulative handoff while the active agent still has the full context.
 - Validates, saves, and reinjects the handoff through hooks.
-- Starts the new window with context headroom and resumes from the exact next action without repeating completed work.
+- Starts the new window with context headroom and resumes from the exact next action.
+
+⭐ [Star Codex Compressor on GitHub](https://github.com/hehee9/codex-compressor)
 
 **Requirements:** Python 3.11 or later · Windows, macOS, or Linux · standalone installation or local Codex plugin
 
@@ -27,18 +31,22 @@
 macOS and Linux:
 
 ```sh
+git clone https://github.com/hehee9/codex-compressor.git
+cd codex-compressor
 ./install.sh install --mode standalone
 ```
 
 Windows PowerShell:
 
 ```powershell
+git clone https://github.com/hehee9/codex-compressor.git
+Set-Location codex-compressor
 .\install.ps1 install --mode standalone
 ```
 
 ## Plugin installation
 
-Register the repository as a local marketplace and install the plugin:
+Register the cloned repository as a local marketplace and install the plugin:
 
 ```text
 codex plugin marketplace add .

@@ -1,6 +1,6 @@
 {
   "name": "codex-compressor",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Codex 컨텍스트 버퍼를 원래 설정을 보존하면서 관리하는 플러그인",
   "author": {
     "name": "hehee9"

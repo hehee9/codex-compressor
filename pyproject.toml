@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codex-compressor"
-version = "0.1.0"
+version = "1.0.0"
 description = "Codex 컨텍스트 버퍼를 설정 보존 방식으로 관리하는 표준 라이브러리 도구"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,4 +27,3 @@ codex-compressor = "codex_compressor.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
