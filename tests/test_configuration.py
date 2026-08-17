@@ -44,6 +44,12 @@ class ConfigurationTests(unittest.TestCase):
         original = "model_context_window = 400000\nmodel_auto_compact_token_limit = 244800\n"
         edit = prepare_token_budget(original)
         self.assertEqual(inspect_token_budget(edit.text)["auto_compact_fallback_prompt"], DEFAULT_FALLBACK_PROMPT)
+        self.assertIn("Keep the visible checkpoint below 9,000 UTF-8 bytes.", DEFAULT_FALLBACK_PROMPT)
+        self.assertTrue(
+            DEFAULT_FALLBACK_PROMPT.endswith(
+                "After the summary is visible, call `new_context`. Do not use another tool first.\n"
+            )
+        )
         self.assertIn("model_context_window = 400000\n", edit.text)
         self.assertIn("model_auto_compact_token_limit = 244800\n", edit.text)
 

@@ -8,7 +8,7 @@
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
             "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
-            "timeout": 5,
+            "timeout": 10,
             "statusMessage": "롤오버 체크포인트 확인"
           }
         ]
@@ -22,7 +22,7 @@
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
             "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
-            "timeout": 5,
+            "timeout": 10,
             "statusMessage": "롤오버 체크포인트 저장"
           }
         ]
@@ -36,7 +36,7 @@
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
             "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
-            "timeout": 5,
+            "timeout": 10,
             "statusMessage": "롤오버 체크포인트 복원"
           }
         ]
@@ -50,7 +50,7 @@
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/hooks/launch.py\"",
             "commandWindows": "py -3 \"${PLUGIN_ROOT}\\hooks\\launch.py\"",
-            "timeout": 5,
+            "timeout": 10,
             "statusMessage": "롤오버 체크포인트 주입"
           }
         ]

@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_compressor import compatibility, continuity
+from codex_compressor import compatibility
 from codex_compressor.configuration import prepare_token_budget
 
 
@@ -114,31 +114,61 @@ class CompatibilityTests(unittest.TestCase):
         self.assertFalse((self.home / "continuity").exists())
         self.assertFalse(Path(captured["probe_home"]).exists())
 
-    def test_unknown_surface_keeps_surface_stages_unobserved(self) -> None:
-        original_home = continuity.os.environ.get("LONG_TASK_CONTINUITY_HOME")
-        continuity.os.environ["LONG_TASK_CONTINUITY_HOME"] = self.temp.name
-        self.addCleanup(self._restore_continuity_home, original_home)
-        session_dir = self.home / "continuity" / "session"
+    def test_event_observation_without_v2_verified_cycle_stays_unobserved(self) -> None:
+        session_dir = Path(self.temp.name) / "continuity" / "session"
         session_dir.mkdir(parents=True)
-        for event in (
-            {"hook_event_name": "PreCompact", "trigger": "auto", "session_id": "session"},
-            {"hook_event_name": "PostCompact", "trigger": "auto", "session_id": "session"},
-            {"hook_event_name": "SessionStart", "source": "compact", "session_id": "session"},
-        ):
-            continuity._record_observation(event, continuity._observation_key(event))
+        (session_dir / "observations.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "events": {
+                        "PreCompact(auto)": {"count": 1},
+                        "PostCompact(auto)": {"count": 1},
+                        "SessionStart(compact)": {"count": 1},
+                    },
+                    "surfaces": ["cli"],
+                    "rollovers_verified": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
         result = compatibility.inspect_compatibility(self.temp.name, run_cli=False)
         self.assertTrue(result["hook_observed"])
-        self.assertTrue(result["rollover_verified"])
-        self.assertEqual(result["cli_observed"], "unobserved")
+        self.assertEqual(result["rollover_verified"], "unobserved")
+        self.assertTrue(result["cli_observed"])
         self.assertEqual(result["desktop_app_server_observed"], "unobserved")
 
-    @staticmethod
-    def _restore_continuity_home(previous: str | None) -> None:
-        if previous is None:
-            continuity.os.environ.pop("LONG_TASK_CONTINUITY_HOME", None)
-        else:
-            continuity.os.environ["LONG_TASK_CONTINUITY_HOME"] = previous
+    def test_v2_verified_rollover_is_aggregated(self) -> None:
+        session_dir = self.home / "continuity" / "verified"
+        session_dir.mkdir(parents=True)
+        (session_dir / "observations.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "events": {"SessionStart(compact)": {"count": 1}},
+                    "rollovers_verified": 1,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = compatibility.inspect_compatibility(self.home, run_cli=False)
+        self.assertTrue(result["rollover_verified"])
 
+    def test_v2_boolean_rollover_count_is_unverified(self) -> None:
+        session_dir = self.home / "continuity" / "boolean"
+        session_dir.mkdir(parents=True)
+        (session_dir / "observations.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "events": {"SessionStart(compact)": {"count": 1}},
+                    "rollovers_verified": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        result = compatibility.inspect_compatibility(self.home, run_cli=False)
+        self.assertEqual(result["rollover_verified"], "unobserved")
 
 if __name__ == "__main__":
     unittest.main()

@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-
+from unittest import mock
 
 from codex_compressor import continuity
 
@@ -24,12 +24,12 @@ class ContinuityTests(unittest.TestCase):
         else:
             os.environ["LONG_TASK_CONTINUITY_HOME"] = self.previous_home
 
-    def _transcript(self, *records: dict) -> str:
+    def _transcript(self, *records: dict, newline: bytes = b"\n") -> str:
         path = Path(self.temp_dir.name) / "transcript.jsonl"
-        path.write_text(
-            "".join(json.dumps(record) + "\n" for record in records),
-            encoding="utf-8",
-        )
+        with path.open("wb") as stream:
+            for record in records:
+                stream.write(json.dumps(record, ensure_ascii=False).encode("utf-8"))
+                stream.write(newline)
         return str(path)
 
     def _event(self, name: str, transcript_path: str | None, **extra: object) -> dict:
@@ -49,209 +49,380 @@ class ContinuityTests(unittest.TestCase):
             result = continuity._handle_event(event)
         return result, output.getvalue(), errors.getvalue()
 
-    def _summary_transcript(self, summary: str = "## Current Objective\nKeep going") -> str:
-        return self._transcript(
-            {"type": "turn_context", "payload": {"turn_id": "turn-1"}},
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": continuity.REQUEST_MARKER}],
-                },
+    def _summary_records(
+        self,
+        summary: str,
+        turn_id: str = "turn-1",
+        *,
+        direct_metadata: bool = False,
+        phase: str = "final_answer",
+    ) -> tuple[dict, dict, dict]:
+        context = {"type": "turn_context", "payload": {"turn_id": turn_id}}
+        marker = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": continuity.REQUEST_MARKER}],
             },
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "message",
-                    "role": "assistant",
-                    "phase": "final_answer",
-                    "content": [{"type": "output_text", "text": summary}],
-                },
+        }
+        assistant = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": phase,
+                "content": [{"type": "output_text", "text": summary}],
             },
+        }
+        if direct_metadata:
+            marker["payload"]["internal_chat_message_metadata_passthrough"] = {
+                "turn_id": turn_id
+            }
+            assistant["payload"]["internal_chat_message_metadata_passthrough"] = {
+                "turn_id": turn_id
+            }
+        return context, marker, assistant
+
+    def _session_dir(self, session_id: str = "session_one") -> Path:
+        return Path(self.temp_dir.name) / "continuity" / session_id
+
+    def _state(self) -> dict:
+        return json.loads((self._session_dir() / "state.json").read_text(encoding="utf-8"))
+
+    def _rollover(self, summary: str, turn_id: str = "turn-1") -> str:
+        transcript = self._transcript(*self._summary_records(summary, turn_id))
+        pre = self._event("PreCompact", transcript, trigger="auto", turn_id=turn_id)
+        self.assertEqual(self._run(pre), (0, "", ""))
+        post = self._event("PostCompact", None, trigger="auto", turn_id=turn_id)
+        self.assertEqual(self._run(post), (0, "", ""))
+        return transcript
+
+    def test_reverse_tail_ignores_malformed_prefix_and_preserves_literal_u2028(self) -> None:
+        path = Path(self.temp_dir.name) / "prefix.jsonl"
+        summary = "## Current Objective\nkeep\u2028going"
+        context, marker, assistant = self._summary_records(summary)
+        path.write_bytes(
+            b"{malformed stale prefix}\n"
+            + json.dumps(context, ensure_ascii=False).encode()
+            + b"\n"
+            + json.dumps(marker, ensure_ascii=False).encode()
+            + b"\n"
+            + json.dumps(assistant, ensure_ascii=False).encode()
+            + b"\n"
+        )
+        event = self._event("PreCompact", str(path), trigger="auto")
+        self.assertEqual(continuity._find_summary_candidate(event), summary)
+
+    def test_reverse_tail_uses_bounded_reads_for_sparse_117gb_equivalent_prefix(self) -> None:
+        path = Path(self.temp_dir.name) / "sparse.jsonl"
+        context, marker, assistant = self._summary_records("bounded")
+        with path.open("wb") as stream:
+            stream.seek(1_170_000_000)
+            stream.write(b"\n")
+            for record in (context, marker, assistant):
+                stream.write(json.dumps(record).encode() + b"\n")
+        event = self._event("PreCompact", str(path), trigger="auto")
+        with mock.patch.object(continuity, "TRANSCRIPT_CHUNK_BYTES", 64 * 1024):
+            self.assertEqual(continuity._find_summary_candidate(event), "bounded")
+
+    def test_reverse_tail_handles_crlf_and_utf8_chunk_boundary(self) -> None:
+        path = Path(self.temp_dir.name) / "boundary.jsonl"
+        context, marker, assistant = self._summary_records("한글 요약")
+        filler = {
+            "type": "session_meta",
+            "payload": {"note": "가" * 30_000},
+        }
+        with path.open("wb") as stream:
+            for record in (filler, context, marker, assistant):
+                stream.write(json.dumps(record, ensure_ascii=False).encode("utf-8"))
+                stream.write(b"\r\n")
+        event = self._event("PreCompact", str(path), trigger="auto")
+        self.assertEqual(continuity._find_summary_candidate(event), "한글 요약")
+
+    def test_incomplete_trailing_line_is_retried(self) -> None:
+        path = Path(self.temp_dir.name) / "incomplete.jsonl"
+        context, marker, assistant = self._summary_records("eventually complete")
+        path.write_bytes(
+            b"".join(json.dumps(record).encode() + b"\n" for record in (context, marker))
+            + json.dumps(assistant).encode()
         )
 
-    def test_pre_and_post_compact_store_and_promote_checkpoint(self) -> None:
-        transcript = self._summary_transcript()
-        event = self._event("PreCompact", transcript, trigger="auto")
-        result, output, errors = self._run(event)
-        self.assertEqual(result, 0)
-        self.assertEqual(output, "")
-        self.assertEqual(errors, "")
+        def finish_line(_delay: float) -> None:
+            with path.open("ab") as stream:
+                stream.write(b"\n")
 
-        session_dir = Path(self.temp_dir.name) / "continuity" / "session_one"
-        self.assertTrue((session_dir / "pending.md").is_file())
-        post = self._event("PostCompact", None, trigger="auto")
-        self.assertEqual(self._run(post), (0, "", ""))
-        self.assertFalse((session_dir / "pending.md").exists())
-        self.assertEqual((session_dir / "current.md").read_text(encoding="utf-8").strip(), "## Current Objective\nKeep going")
-        state = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
+        event = self._event("PreCompact", str(path), trigger="auto")
+        with mock.patch.object(continuity.time, "sleep", side_effect=finish_line):
+            self.assertEqual(
+                continuity._find_summary_candidate(event, wait_seconds=1.0),
+                "eventually complete",
+            )
+
+    def test_partial_newer_final_beats_complete_draft_after_retry(self) -> None:
+        path = Path(self.temp_dir.name) / "partial-final.jsonl"
+        context, marker, draft = self._summary_records("complete draft", phase="commentary")
+        final = self._summary_records("new final answer", phase="final_answer")[2]
+        path.write_bytes(
+            b"".join(json.dumps(record).encode() + b"\n" for record in (context, marker, draft))
+            + json.dumps(final).encode()
+        )
+
+        def finish_line(_delay: float) -> None:
+            with path.open("ab") as stream:
+                stream.write(b"\n")
+
+        event = self._event("PreCompact", str(path), trigger="auto")
+        with mock.patch.object(continuity.time, "sleep", side_effect=finish_line):
+            self.assertEqual(
+                continuity._find_summary_candidate(event, wait_seconds=1.0),
+                "new final answer",
+            )
+
+    def test_marker_without_metadata_requires_matching_in_range_turn_boundary(self) -> None:
+        _context, marker, assistant = self._summary_records("unverified")
+        path = self._transcript(marker, assistant)
+        event = self._event("PreCompact", path, trigger="auto")
+        with self.assertRaisesRegex(
+            continuity._TranscriptError, "matching turn boundary"
+        ):
+            continuity._find_summary_candidate(event)
+
+    def test_relevant_malformed_tail_fails_diagnostically(self) -> None:
+        context, marker, _assistant = self._summary_records("unused")
+        path = Path(self.temp_dir.name) / "relevant-malformed.jsonl"
+        path.write_bytes(
+            b"".join(json.dumps(record).encode() + b"\n" for record in (context, marker))
+            + b"{malformed relevant record}\n"
+        )
+        event = self._event("PreCompact", str(path), trigger="auto")
+        with self.assertRaises(continuity._TranscriptError):
+            continuity._find_summary_candidate(event)
+
+    def test_final_answer_is_preferred_after_latest_marker(self) -> None:
+        context, marker, _ = self._summary_records("draft", phase="commentary")
+        final = self._summary_records("final", phase="final_answer")[2]
+        path = self._transcript(context, marker, {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"text": "another draft"}],
+            },
+        }, final)
+        event = self._event("PreCompact", path, trigger="auto")
+        self.assertEqual(continuity._find_summary_candidate(event), "final")
+
+    def test_clean_first_rollover_establishes_four_hash_chain(self) -> None:
+        self._rollover("first checkpoint")
+        state = self._state()
+        active = state["active_rollover"]
+        self.assertEqual(state["version"], 2)
+        self.assertEqual(active["phase"], "committed")
+        self.assertEqual(active["generated_sha256"], active["pending_sha256"])
+        self.assertEqual(active["pending_sha256"], active["current_sha256"])
+        start = self._event("SessionStart", None, source="compact")
+        start.pop("turn_id")
+        result, output, errors = self._run(start)
+        self.assertEqual((result, errors), (0, ""))
+        self.assertIn("first checkpoint", json.loads(output)["hookSpecificOutput"]["additionalContext"])
+        active = self._state()["active_rollover"]
+        self.assertEqual(active["phase"], "injected")
+        hashes = {
+            active["generated_sha256"],
+            active["pending_sha256"],
+            active["current_sha256"],
+            active["injected_sha256"],
+        }
+        self.assertEqual(len(hashes), 1)
+        observations = json.loads((self._session_dir() / "observations.json").read_text())
+        self.assertEqual(observations["last_verified_turn_id"], active["turn_id"])
+        self.assertEqual(observations["rollovers_verified"], 1)
+
+    def test_multiple_exact_rollovers_do_not_reuse_previous_turn(self) -> None:
+        self._rollover("checkpoint one", "turn-1")
+        first_start = self._run(self._event("SessionStart", None, source="compact"))
+        self.assertIn("checkpoint one", first_start[1])
+        transcript = self._transcript(*self._summary_records("checkpoint two", "turn-2"))
+        self.assertEqual(
+            self._run(self._event("PreCompact", transcript, trigger="manual", turn_id="turn-2")),
+            (0, "", ""),
+        )
+        self.assertEqual(
+            self._run(self._event("PostCompact", None, trigger="manual", turn_id="turn-2")),
+            (0, "", ""),
+        )
+        result, output, _errors = self._run(
+            self._event("SessionStart", None, source="compact", turn_id="turn-2")
+        )
+        self.assertEqual(result, 0)
+        self.assertIn("checkpoint two", output)
+        self.assertEqual(self._state()["window_count"], 2)
+
+    def test_stale_pending_wrong_turn_is_not_reused(self) -> None:
+        transcript = self._transcript(*self._summary_records("turn one", "turn-1"))
+        self.assertEqual(
+            self._run(self._event("PreCompact", transcript, trigger="auto")),
+            (0, "", ""),
+        )
+        result, output, errors = self._run(
+            self._event("PreCompact", None, trigger="auto", turn_id="turn-2")
+        )
+        self.assertEqual(result, 0)
+        self.assertFalse(json.loads(output)["continue"])
+        self.assertIn("transcript_path is required", errors)
+
+    def test_failed_new_compact_invalidates_older_committed_checkpoint(self) -> None:
+        self._rollover("older committed", "turn-1")
+        result, output, errors = self._run(
+            self._event("PreCompact", None, trigger="manual", turn_id="turn-2")
+        )
+        self.assertEqual(result, 0)
+        self.assertFalse(json.loads(output)["continue"])
+        self.assertIn("transcript_path is required", errors)
+        state = self._state()
+        self.assertNotIn("active_rollover", state)
         self.assertEqual(state["window_count"], 1)
 
-    def test_valid_pending_checkpoint_does_not_reread_transcript(self) -> None:
-        session_dir = Path(self.temp_dir.name) / "continuity" / "session_one"
+        start = self._event("SessionStart", None, source="compact")
+        start.pop("turn_id")
+        result, output, errors = self._run(start)
+        self.assertEqual(result, 0)
+        self.assertIn("verification failed", output)
+        self.assertIn("committed v2", errors)
+
+    def test_tampered_pending_and_current_remain_ineligible(self) -> None:
+        self._rollover("trusted", "turn-1")
+        session_dir = self._session_dir()
+        # 다음 pending을 만든 뒤 tamper하면 PostCompact가 current를 갱신하지 않는다.
+        transcript = self._transcript(*self._summary_records("new", "turn-2"))
+        self.assertEqual(
+            self._run(self._event("PreCompact", transcript, trigger="auto", turn_id="turn-2")),
+            (0, "", ""),
+        )
+        (session_dir / "pending.md").write_text("tampered", encoding="utf-8")
+        self.assertEqual(
+            self._run(self._event("PostCompact", None, trigger="auto", turn_id="turn-2"))[0],
+            0,
+        )
+        self.assertEqual(self._state()["window_count"], 1)
+        self.assertEqual((session_dir / "current.md").read_text(encoding="utf-8").strip(), "trusted")
+        result, output, _errors = self._run(
+            self._event("SessionStart", None, source="compact", turn_id="turn-2")
+        )
+        self.assertEqual(result, 0)
+        self.assertIn("verification failed", output)
+
+        # committed current를 바꿔도 stale 값은 주입하지 않는다.
+        self._rollover("fresh", "turn-3")
+        (session_dir / "current.md").write_text("tampered current", encoding="utf-8")
+        result, output, _errors = self._run(
+            self._event("SessionStart", None, source="compact", turn_id="turn-3")
+        )
+        self.assertEqual(result, 0)
+        self.assertIn("verification failed", output)
+
+    def test_duplicate_session_start_is_empty_and_does_not_increment(self) -> None:
+        self._rollover("once")
+        start = self._event("SessionStart", None, source="compact")
+        self.assertEqual(self._run(start)[1].count("long_task_continuity_checkpoint"), 2)
+        before = json.loads((self._session_dir() / "observations.json").read_text())
+        self.assertEqual(self._run(start), (0, "", ""))
+        after = json.loads((self._session_dir() / "observations.json").read_text())
+        self.assertEqual(after["rollovers_verified"], before["rollovers_verified"])
+
+    def test_v1_observation_sequence_counts_reset_in_v2(self) -> None:
+        session_dir = self._session_dir()
         session_dir.mkdir(parents=True)
-        (session_dir / "pending.md").write_text("existing checkpoint\n", encoding="utf-8")
-        event = self._event("PreCompact", None, trigger="manual")
-        self.assertEqual(self._run(event), (0, "", ""))
-
-    def test_missing_transcript_is_a_compaction_failure_and_logged(self) -> None:
-        event = self._event("PreCompact", None, trigger="auto")
-        result, output, errors = self._run(event)
-        self.assertEqual(result, 0)
-        response = json.loads(output)
-        self.assertFalse(response["continue"])
-        self.assertIn("transcript_path is required", response["stopReason"])
-        self.assertIn("transcript_path is required", errors)
-        self.assertIn("transcript_path is required", (Path(self.temp_dir.name) / "continuity" / ".last-error.log").read_text(encoding="utf-8"))
-
-    def test_oversized_checkpoint_is_rejected(self) -> None:
-        transcript = self._summary_transcript("x" * (continuity.MAX_SUMMARY_CHARS + 1))
-        event = self._event("PreCompact", transcript, trigger="manual")
-        result, output, _ = self._run(event)
-        self.assertEqual(result, 0)
-        response = json.loads(output)
-        self.assertFalse(response["continue"])
-        self.assertIn(f"{continuity.MAX_SUMMARY_CHARS:,}", response["stopReason"])
-
-    def test_malformed_and_unsupported_transcripts_fail_diagnostically(self) -> None:
-        cases = [
-            ("{not json}\n", "malformed JSON"),
-            (json.dumps({"type": "session_meta", "payload": {}}) + "\n", "no supported"),
-        ]
-        for content, expected in cases:
-            with self.subTest(expected=expected):
-                transcript = Path(self.temp_dir.name) / "bad.jsonl"
-                transcript.write_text(content, encoding="utf-8")
-                event = self._event("PreCompact", str(transcript), trigger="auto")
-                result, output, errors = self._run(event)
-                self.assertEqual(result, 0)
-                self.assertIn(expected, json.loads(output)["stopReason"])
-                self.assertIn(expected, errors)
-
-    def test_new_context_denies_without_a_checkpoint(self) -> None:
-        transcript = self._transcript(
-            {"type": "turn_context", "payload": {"turn_id": "turn-1"}},
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "message",
-                    "role": "developer",
-                    "content": [{"type": "input_text", "text": continuity.REQUEST_MARKER}],
-                },
-            },
+        (session_dir / "observations.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rollover_phase": 2,
+                    "rollovers_verified": 99,
+                    "events": {},
+                }
+            ),
+            encoding="utf-8",
         )
-        event = self._event("PreToolUse", transcript, tool_name="new_context")
-        result, output, _ = self._run(event)
-        self.assertEqual(result, 0)
-        response = json.loads(output)
-        self.assertEqual(response["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn(continuity.RETRY_MARKER, response["hookSpecificOutput"]["permissionDecisionReason"])
+        self._run(self._event("PreCompact", None, trigger="other"))
+        continuity._record_observation(self._event("PreCompact", None, trigger="auto"), "PreCompact(auto)")
+        observations = json.loads((session_dir / "observations.json").read_text())
+        self.assertEqual(observations["version"], 2)
+        self.assertEqual(observations["rollovers_verified"], 0)
+        self.assertNotIn("rollover_phase", observations)
 
-    def test_session_start_reinjects_current_checkpoint(self) -> None:
-        session_dir = Path(self.temp_dir.name) / "continuity" / "session_one"
+    def test_v1_state_cannot_authorize_session_start_injection(self) -> None:
+        session_dir = self._session_dir()
         session_dir.mkdir(parents=True)
-        (session_dir / "current.md").write_text("Continue from here", encoding="utf-8")
-        event = self._event("SessionStart", None, source="compact")
-        result, output, errors = self._run(event)
+        (session_dir / "current.md").write_text("legacy", encoding="utf-8")
+        (session_dir / "state.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "window_count": 4,
+                    "active_rollover": {
+                        "turn_id": "turn-1",
+                        "phase": "committed",
+                        "generated_sha256": continuity._checkpoint_sha256("legacy"),
+                        "pending_sha256": continuity._checkpoint_sha256("legacy"),
+                        "current_sha256": continuity._checkpoint_sha256("legacy"),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        result, output, errors = self._run(
+            self._event("SessionStart", None, source="compact")
+        )
         self.assertEqual(result, 0)
-        self.assertEqual(errors, "")
-        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("<long_task_continuity_checkpoint>", context)
-        self.assertIn("Continue from here", context)
-        self.assertIn("do not call `new_context` again", context)
+        self.assertIn("verification failed", output)
+        self.assertIn("v2", errors)
 
-    def test_multiple_rollovers_increment_window_count(self) -> None:
-        session_dir = Path(self.temp_dir.name) / "continuity" / "session_one"
-        for index, trigger in enumerate(("auto", "manual"), start=1):
-            transcript = self._summary_transcript(f"## Current Objective\nrollover {index}")
-            event = self._event("PreCompact", transcript, trigger=trigger)
-            self.assertEqual(self._run(event)[0], 0)
-            post = self._event("PostCompact", None, trigger=trigger, turn_id=f"turn-{index}")
-            self.assertEqual(self._run(post), (0, "", ""))
-            self.assertEqual(
-                self._run(self._event("SessionStart", None, source="compact"))[0],
-                0,
-            )
-        state = json.loads((session_dir / "state.json").read_text(encoding="utf-8"))
-        self.assertEqual(state["window_count"], 2)
-        self.assertEqual((session_dir / "current.md").read_text(encoding="utf-8").strip(), "## Current Objective\nrollover 2")
-        observations = json.loads((session_dir / "observations.json").read_text(encoding="utf-8"))
-        self.assertEqual(observations["rollovers_verified"], 2)
-        self.assertEqual(observations["events"]["PreCompact(auto)"]["count"], 1)
-        self.assertEqual(observations["events"]["PreCompact(manual)"]["count"], 1)
-
-    def test_supported_hook_events_write_atomic_observations(self) -> None:
-        transcript = self._summary_transcript()
+    def test_pre_tool_use_saves_and_verifies_pending_chain(self) -> None:
+        transcript = self._transcript(*self._summary_records("new context summary"))
+        result, output, errors = self._run(
+            self._event("PreToolUse", transcript, tool_name="new_context")
+        )
+        self.assertEqual((result, output, errors), (0, "", ""))
+        state = self._state()
+        active = state["active_rollover"]
+        self.assertEqual(active["phase"], "pending")
+        self.assertEqual(active["generated_sha256"], active["pending_sha256"])
         self.assertEqual(
-            self._run(self._event("PreToolUse", transcript, tool_name="new_context"))[0],
-            0,
+            continuity._read_checkpoint(self._session_dir() / "pending.md")[1],
+            active["pending_sha256"],
         )
-        self.assertEqual(
-            self._run(self._event("PreCompact", transcript, trigger="auto"))[0],
-            0,
-        )
-        self.assertEqual(
-            self._run(self._event("PostCompact", None, trigger="auto"))[0],
-            0,
-        )
-        self.assertEqual(
-            self._run(self._event("SessionStart", None, source="compact"))[0],
-            0,
-        )
-        self._run({"hook_event_name": "Notification", "session_id": "session/one"})
 
-        observation_path = (
-            Path(self.temp_dir.name)
-            / "continuity"
-            / "session_one"
-            / "observations.json"
+    def test_exact_additional_context_bytes_accept_and_reject_multibyte_content(self) -> None:
+        base_bytes = len(continuity._build_additional_context("").encode("utf-8"))
+        room = continuity.MAX_ADDITIONAL_CONTEXT_BYTES - base_bytes
+        korean_count, ascii_count = divmod(room, 3)
+        accepted = "가" * korean_count + "x" * ascii_count
+        self.assertIsNone(continuity._summary_problem(accepted))
+        self.assertEqual(
+            len(continuity._build_additional_context(accepted).encode("utf-8")),
+            continuity.MAX_ADDITIONAL_CONTEXT_BYTES,
         )
-        observations = json.loads(observation_path.read_text(encoding="utf-8"))
-        self.assertEqual(observations["version"], continuity.OBSERVATION_VERSION)
-        self.assertEqual(observations["events"]["PreToolUse(new_context)"]["count"], 1)
-        self.assertEqual(observations["events"]["PreCompact(auto)"]["count"], 1)
-        self.assertEqual(observations["events"]["PostCompact(auto)"]["count"], 1)
-        self.assertEqual(observations["events"]["SessionStart(compact)"]["count"], 1)
-        self.assertNotIn("Notification", observations["events"])
-        for event in observations["events"].values():
-            self.assertIn("first_seen_at", event)
-            self.assertIn("last_seen_at", event)
+        rejected = accepted + "x"
+        problem = continuity._summary_problem(rejected)
+        self.assertIsNotNone(problem)
+        self.assertIn("10,001", problem or "")
 
-    def test_observation_surface_uses_session_metadata(self) -> None:
-        for source, expected in (
-            ("cli", "cli"),
-            ("vscode", "desktop_app_server"),
-        ):
-            with self.subTest(source=source):
-                transcript = self._transcript(
-                    {
-                        "type": "session_meta",
-                        "payload": {"source": source},
-                    }
-                )
-                event = self._event(
-                    "PreCompact",
-                    transcript,
-                    trigger="manual",
-                    session_id=f"surface-{source}",
-                )
-                self._run(event)
-                observation_path = (
-                    Path(self.temp_dir.name)
-                    / "continuity"
-                    / f"surface-{source}"
-                    / "observations.json"
-                )
-                observations = json.loads(
-                    observation_path.read_text(encoding="utf-8")
-                )
-                self.assertEqual(observations["surfaces"], [expected])
+    def test_pre_tool_use_requires_turn_and_denies_discovery_failure(self) -> None:
+        event = self._event("PreToolUse", None, tool_name="new_context", turn_id="")
+        result, output, _errors = self._run(event)
+        self.assertEqual(result, 0)
+        self.assertEqual(json.loads(output)["hookSpecificOutput"]["permissionDecision"], "deny")
 
-    def test_unrelated_events_and_triggers_are_no_ops(self) -> None:
-        self.assertEqual(self._run({"hook_event_name": "Notification"}), (0, "", ""))
-        event = self._event("PreCompact", None, trigger="other")
-        self.assertEqual(self._run(event), (0, "", ""))
+    def test_session_start_missing_current_is_a_verification_failure(self) -> None:
+        result, output, errors = self._run(
+            self._event("SessionStart", None, source="compact")
+        )
+        self.assertEqual(result, 0)
+        self.assertIn("verification failed", output)
+        self.assertIn("current checkpoint file is missing", errors)
 
 
 if __name__ == "__main__":

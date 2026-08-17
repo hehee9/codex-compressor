@@ -276,8 +276,14 @@ def _observation_summary(home: Path) -> dict[str, Any]:
         events = observation.get("events")
         if isinstance(events, dict) and events:
             hook_observed = True
+        version = observation.get("version")
         value = observation.get("rollovers_verified", 0)
-        if isinstance(value, int) and value > 0:
+        if (
+            type(version) is int
+            and version >= 2
+            and type(value) is int
+            and value > 0
+        ):
             rollover_count += value
         for surface in observation.get("surfaces", []):
             if surface in {"cli", "desktop_app_server"}:

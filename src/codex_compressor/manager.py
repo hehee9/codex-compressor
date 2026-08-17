@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from .compatibility import inspect_compatibility
 from .configuration import (
+    DEFAULT_FALLBACK_PROMPT,
     LEGACY_SCRIPT_SHA256,
     REQUEST_MARKER,
     ConfigurationConflict,
@@ -31,7 +32,7 @@ from .configuration import (
 )
 
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 HOOK_EVENTS = ("PreToolUse", "PreCompact", "PostCompact", "SessionStart")
 CONTINUITY_RELATIVE = Path("codex_compressor") / "continuity.py"
 
@@ -349,7 +350,7 @@ class Manager:
             "type": "command",
             "command": f"{shlex.quote(executable)} {shlex.quote(continuity)}",
             "commandWindows": subprocess.list2cmdline([executable, continuity]),
-            "timeout": 5,
+            "timeout": 10,
             "statusMessage": "Preserving the rollover checkpoint",
         }
 
@@ -566,8 +567,25 @@ class Manager:
                 "auto_compact_fallback_buffer_tokens",
             )
         ):
-            desired = dict(previous_installed)
             legacy = previous_legacy
+            if legacy:
+                desired = dict(previous_installed)
+                desired["auto_compact_fallback_prompt"] = DEFAULT_FALLBACK_PROMPT
+            else:
+                desired = None
+            try:
+                current = inspect_token_budget(config_text)
+            except ConfigurationError as exc:
+                raise ManagerError(str(exc)) from exc
+            if all(
+                key in current and current[key] == previous_installed[key]
+                for key in (
+                    "enabled",
+                    "auto_compact_fallback_prompt",
+                    "auto_compact_fallback_buffer_tokens",
+                )
+            ):
+                replace_token_budget = True
         else:
             legacy = self._legacy_installation(hooks_data)
             if legacy:

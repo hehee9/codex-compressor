@@ -21,6 +21,7 @@ LEGACY_SCRIPT_SHA256 = (
 DEFAULT_FALLBACK_PROMPT = (
     "[LONG_TASK_CONTINUITY_SUMMARY_REQUEST_V1]\n"
     "The current context window has reached its rollover point. Before doing any more task work, write one visible assistant message in English that preserves the operational continuation state, then call `new_context`. Do not start another model, fork a thread, or copy the transcript into another request. The format below is recommended, not mandatory. Include enough detail to continue reliably, but omit exact commands and raw tool output by default.\n"
+    "Keep the visible checkpoint below 9,000 UTF-8 bytes.\n"
     "\n"
     "<summary>\n"
     "## Current objective and active constraints\n"

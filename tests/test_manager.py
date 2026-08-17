@@ -10,6 +10,11 @@ import unittest
 from pathlib import Path
 
 import codex_compressor.manager as manager_module
+from codex_compressor.configuration import (
+    DEFAULT_FALLBACK_PROMPT,
+    inspect_token_budget,
+    prepare_token_budget,
+)
 from codex_compressor.manager import Manager, ManagerError
 
 
@@ -51,6 +56,7 @@ class ManagerTests(unittest.TestCase):
             if self.manager._hook_is_compressor(item)
         )
         hook = installed_hook["hooks"][0]
+        self.assertEqual(hook["timeout"], 10)
         self.assertNotIn("py -3.11", hook["commandWindows"])
         self.assertIn(str(Path(sys.executable).resolve()), hook["command"])
         self.assertIn(str((self.manager.runtime_root / "codex_compressor" / "continuity.py").resolve()), hook["command"])
@@ -67,6 +73,122 @@ class ManagerTests(unittest.TestCase):
         self.assertFalse(self.home.joinpath("config.toml").exists())
         self.assertFalse(self.home.joinpath("hooks.json").exists())
         self.assertFalse(self.manager.state_path.exists())
+
+    def test_reinstall_upgrades_unchanged_previous_managed_defaults(self) -> None:
+        self.manager.install("standalone")
+        first_state = json.loads(self.manager.state_path.read_text(encoding="utf-8"))
+        old_prompt = DEFAULT_FALLBACK_PROMPT.replace(
+            "Keep the visible checkpoint below 9,000 UTF-8 bytes.\n", ""
+        )
+        config = self.home / "config.toml"
+        config.write_text(
+            prepare_token_budget(
+                config.read_text(encoding="utf-8"),
+                replace=True,
+                desired={
+                    "enabled": True,
+                    "auto_compact_fallback_prompt": old_prompt,
+                    "auto_compact_fallback_buffer_tokens": 16_384,
+                },
+            ).text,
+            encoding="utf-8",
+        )
+        state = first_state
+        state["token_budget"]["installed"]["auto_compact_fallback_prompt"] = old_prompt
+        self.manager.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = self.manager.install("standalone")
+
+        self.assertTrue(result["changed"]["config"])
+        self.assertEqual(
+            inspect_token_budget(config.read_text(encoding="utf-8"))[
+                "auto_compact_fallback_prompt"
+            ],
+            DEFAULT_FALLBACK_PROMPT,
+        )
+        upgraded_state = json.loads(self.manager.state_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            upgraded_state["token_budget"]["original"],
+            first_state["token_budget"]["original"],
+        )
+        self.assertEqual(
+            upgraded_state["token_budget"]["legacy_migrated"],
+            first_state["token_budget"]["legacy_migrated"],
+        )
+
+    def test_reinstall_upgrades_legacy_prompt_and_preserves_buffer_ownership(self) -> None:
+        self.manager.install("standalone")
+        first_state = json.loads(self.manager.state_path.read_text(encoding="utf-8"))
+        old_prompt = DEFAULT_FALLBACK_PROMPT.replace(
+            "Keep the visible checkpoint below 9,000 UTF-8 bytes.\n", ""
+        )
+        config = self.home / "config.toml"
+        config.write_text(
+            prepare_token_budget(
+                config.read_text(encoding="utf-8"),
+                replace=True,
+                desired={
+                    "enabled": True,
+                    "auto_compact_fallback_prompt": old_prompt,
+                    "auto_compact_fallback_buffer_tokens": 155200,
+                },
+            ).text,
+            encoding="utf-8",
+        )
+        state = first_state
+        state["token_budget"]["installed"] = {
+            "enabled": True,
+            "auto_compact_fallback_prompt": old_prompt,
+            "auto_compact_fallback_buffer_tokens": 155200,
+        }
+        state["token_budget"]["legacy_migrated"] = True
+        self.manager.state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        self.manager.install("standalone")
+
+        installed = inspect_token_budget(config.read_text(encoding="utf-8"))
+        self.assertEqual(installed["auto_compact_fallback_prompt"], DEFAULT_FALLBACK_PROMPT)
+        self.assertEqual(installed["auto_compact_fallback_buffer_tokens"], 155200)
+        upgraded_state = json.loads(self.manager.state_path.read_text(encoding="utf-8"))
+        self.assertTrue(upgraded_state["token_budget"]["legacy_migrated"])
+        self.assertEqual(
+            upgraded_state["token_budget"]["original"],
+            first_state["token_budget"]["original"],
+        )
+
+    def test_reinstall_protects_user_modified_prompt_until_explicit_replacement(self) -> None:
+        self.manager.install("standalone")
+        config = self.home / "config.toml"
+        user_prompt = "사용자가 수정한 프롬프트"
+        config.write_text(
+            prepare_token_budget(
+                config.read_text(encoding="utf-8"),
+                replace=True,
+                desired={
+                    "enabled": True,
+                    "auto_compact_fallback_prompt": user_prompt,
+                    "auto_compact_fallback_buffer_tokens": 16_384,
+                },
+            ).text,
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ManagerError):
+            self.manager.install("standalone")
+        self.assertEqual(
+            inspect_token_budget(config.read_text(encoding="utf-8"))[
+                "auto_compact_fallback_prompt"
+            ],
+            user_prompt,
+        )
+
+        self.manager.install("standalone", replace_token_budget=True)
+        self.assertEqual(
+            inspect_token_budget(config.read_text(encoding="utf-8"))[
+                "auto_compact_fallback_prompt"
+            ],
+            DEFAULT_FALLBACK_PROMPT,
+        )
 
     def test_uninstall_retains_star_marker_unless_purged(self) -> None:
         self.manager.install("standalone")

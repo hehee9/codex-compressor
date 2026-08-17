@@ -72,6 +72,7 @@ class PluginContractTests(unittest.TestCase):
         ]
 
         self.assertTrue(all(hook["type"] == "command" for hook in command_hooks))
+        self.assertTrue(all(hook["timeout"] == 10 for hook in command_hooks))
         self.assertTrue(
             all("${PLUGIN_ROOT}" in hook["command"] for hook in command_hooks)
         )
