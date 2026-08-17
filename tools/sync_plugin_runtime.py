@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""소스 코어를 플러그인 런타임에 결정적으로 동기화합니다."""
+"""Synchronize the source package to the bundled plugin runtime."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def sync(source: Path = SOURCE_ROOT, destination: Path = PLUGIN_RUNTIME_ROOT) ->
     source = source.resolve()
     destination = destination.resolve()
     if not source.is_dir():
-        raise FileNotFoundError(f"소스 패키지를 찾을 수 없습니다: {source}")
+        raise FileNotFoundError(f"Source package not found: {source}")
 
     destination.mkdir(parents=True, exist_ok=True)
     for cache in sorted(
@@ -87,7 +87,7 @@ def check(source: Path = SOURCE_ROOT, destination: Path = PLUGIN_RUNTIME_ROOT) -
     source = source.resolve()
     destination = destination.resolve()
     if not source.is_dir():
-        raise FileNotFoundError(f"소스 패키지를 찾을 수 없습니다: {source}")
+        raise FileNotFoundError(f"Source package not found: {source}")
     return _find_differences(source, destination)
 
 
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="대상을 수정하지 않고 소스와의 차이만 확인합니다.",
+        help="Check for differences without modifying the plugin runtime.",
     )
     args = parser.parse_args(argv)
     try:
@@ -107,12 +107,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if differences:
-        print("동기화 차이:")
+        print("Synchronization differences:")
         for path in differences:
             print(f"- {path.as_posix()}")
     if args.check and differences:
         return 1
-    print("플러그인 런타임 동기화 완료")
+    print("Plugin runtime synchronization complete")
     return 0
 
 

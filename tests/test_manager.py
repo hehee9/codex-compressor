@@ -131,7 +131,7 @@ class ManagerTests(unittest.TestCase):
         original_write = manager_module._atomic_write
 
         def fail_config(path: Path, data: bytes) -> None:
-            if Path(path) == self.home / "config.toml":
+            if Path(path) == self.manager.config_path:
                 raise OSError("의도적 검사 실패")
             original_write(path, data)
 
