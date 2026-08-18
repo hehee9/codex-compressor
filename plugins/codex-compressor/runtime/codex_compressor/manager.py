@@ -32,7 +32,7 @@ from .configuration import (
 )
 
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 HOOK_EVENTS = ("PreToolUse", "PreCompact", "PostCompact", "SessionStart")
 CONTINUITY_RELATIVE = Path("codex_compressor") / "continuity.py"
 
@@ -205,13 +205,34 @@ class Manager:
                 return {}
         return {}
 
-    def _trust_approval_status(self, state: dict[str, Any] | None) -> bool | str:
-        """설치 후 변경된 네 훅 신뢰 해시를 확인합니다."""
+    @staticmethod
+    def _hook_fingerprint(declarations: dict[str, Any]) -> str:
+        """관리 훅 선언을 정규화해 결정적 지문으로 만듭니다."""
+
+        return _sha256(_json_bytes(declarations))
+
+    def _trust_approval_status(
+        self,
+        state: dict[str, Any] | None,
+        expected_fingerprint: str | None = None,
+    ) -> bool | str:
+        """설치 후 변경된 네 훅 신뢰 해시와 선언 지문을 확인합니다."""
 
         if not state or state.get("mode") != "standalone":
             return "unobserved"
+        if expected_fingerprint is None:
+            declarations = state.get("hooks")
+            if isinstance(declarations, dict):
+                expected_fingerprint = self._hook_fingerprint(declarations)
         if state.get("trust_approved") is True:
-            return True
+            approved_fingerprint = state.get("trust_approved_fingerprint")
+            if approved_fingerprint == expected_fingerprint:
+                return True
+            # 지문이 없는 이전 상태는 기존 Codex 승인 정보를 재사용하지
+            # 않습니다. 지문이 있는 상태의 선언 변경은 아래의 기존 승인
+            # 관찰 흐름을 통해 새 승인을 기록할 수 있습니다.
+            if not isinstance(approved_fingerprint, str):
+                return "unobserved"
         try:
             current = parse_config(self._load_target_text(self.config_path))
         except ConfigurationError:
@@ -529,7 +550,10 @@ class Manager:
         if mode not in {"standalone", "plugin"}:
             raise ManagerError("mode는 standalone 또는 plugin이어야 합니다")
         old_state = self._state()
-        trust_approved = self._trust_approval_status(old_state)
+        owned_hooks = self._new_hooks()["hooks"]
+        owned_hook_state = {event: entries[0] for event, entries in owned_hooks.items()}
+        hook_fingerprint = self._hook_fingerprint(owned_hook_state)
+        trust_approved = self._trust_approval_status(old_state, hook_fingerprint)
         config_snapshot = _read_snapshot(self.config_path)
         hooks_snapshot = _read_snapshot(self.hooks_path)
         config_text = _text_from_bytes(config_snapshot.data) if config_snapshot.existed else ""
@@ -654,7 +678,7 @@ class Manager:
         if mode == "standalone":
             new_hooks.setdefault("hooks", {})
             entries = new_hooks["hooks"]
-            fresh = self._new_hooks()["hooks"]
+            fresh = owned_hooks
             for event in HOOK_EVENTS:
                 entries.setdefault(event, [])
                 entries[event].extend(fresh[event])
@@ -693,16 +717,16 @@ class Manager:
                 "legacy_migrated": legacy,
             },
             "hooks": (
-                {
-                    event: entries[0]
-                    for event, entries in self._new_hooks().get("hooks", {}).items()
-                }
+                owned_hook_state
                 if mode == "standalone"
                 else {}
             ),
             "runtime_files": sorted(runtime_plan.files),
             "runtime_hashes": runtime_hashes,
             "trust_approved": trust_approved is True,
+            "trust_approved_fingerprint": (
+                hook_fingerprint if mode == "standalone" and trust_approved is True else None
+            ),
             "last_backup_id": None,
             "updated_at": datetime.now(UTC).isoformat(),
         }

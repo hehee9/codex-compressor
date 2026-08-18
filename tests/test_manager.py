@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import codex_compressor.manager as manager_module
 from codex_compressor.configuration import (
@@ -206,7 +207,20 @@ class ManagerTests(unittest.TestCase):
         self.assertTrue(self.manager.uninstall(purge_state=True)["ok"])
         self.assertFalse(marker.exists())
 
-    def test_trust_approval_is_detected_and_survives_reinstall(self) -> None:
+    def test_legacy_approval_without_fingerprint_requires_reapproval(self) -> None:
+        self.manager.install("standalone")
+        state = self.manager._state()
+        state["trust_approved"] = True
+        state.pop("trust_approved_fingerprint", None)
+        self.manager._write_state(state)
+
+        self.manager.install("standalone")
+
+        migrated = self.manager._state()
+        self.assertIs(migrated["trust_approved"], False)
+        self.assertIsNone(migrated["trust_approved_fingerprint"])
+
+    def test_matching_hook_fingerprint_reuses_approval(self) -> None:
         self.manager.install("standalone")
         config = self.home / "config.toml"
         text = config.read_text(encoding="utf-8")
@@ -226,7 +240,43 @@ class ManagerTests(unittest.TestCase):
         self.manager.install("standalone")
         reinstalled = self.manager._state()
         self.assertIs(reinstalled["trust_approved"], True)
+        self.assertEqual(
+            reinstalled["trust_approved_fingerprint"],
+            self.manager._hook_fingerprint(reinstalled["hooks"]),
+        )
         self.assertIs(self.manager._trust_approval_status(reinstalled), True)
+
+        result = self.manager.install("standalone")
+        self.assertIsNone(result["backup_id"])
+        self.assertIs(self.manager._state()["trust_approved"], True)
+
+    def test_changed_hook_declaration_invalidates_approval(self) -> None:
+        old_entry = self.manager._hook_entry()
+        old_entry["timeout"] = 5
+        with patch.object(self.manager, "_hook_entry", return_value=old_entry):
+            self.manager.install("standalone")
+            config = self.home / "config.toml"
+            text = config.read_text(encoding="utf-8")
+            for index, label in enumerate(
+                ("pre_tool_use", "pre_compact", "post_compact", "session_start"),
+                start=1,
+            ):
+                key = f"{self.manager.hooks_path}:{label}:0:0"
+                text += (
+                    f"\n[hooks.state.'{key}']\n"
+                    f'trusted_hash = "sha256:{index:064x}"\n'
+                )
+            config.write_text(text, encoding="utf-8")
+            self.manager.install("standalone")
+            approved = self.manager._state()
+            self.assertIs(approved["trust_approved"], True)
+
+        result = self.manager.install("standalone")
+
+        self.assertTrue(result["changed"]["hooks"])
+        invalidated = self.manager._state()
+        self.assertIs(invalidated["trust_approved"], False)
+        self.assertIsNone(invalidated["trust_approved_fingerprint"])
 
     def test_untouched_restore_succeeds_and_later_edit_is_refused(self) -> None:
         backup_id = self.manager.install("standalone")["backup_id"]
