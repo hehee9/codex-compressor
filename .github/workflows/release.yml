@@ -1,16 +1,93 @@
-name: 태그 릴리스
+name: 버전 릴리스
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: 릴리스 버전 확인
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.metadata.outputs.release_tag }}
+      release_version: ${{ steps.metadata.outputs.release_version }}
+      should_release: ${{ steps.metadata.outputs.should_release }}
+    steps:
+      - name: 저장소 가져오기
+        uses: actions/checkout@v4
+      - name: Python 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: 버전과 기존 태그 확인
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import subprocess
+          import tomllib
+
+          project_version = tomllib.loads(
+              Path("pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+          manifest_version = json.loads(
+              Path("plugins/codex-compressor/.codex-plugin/plugin.json").read_text(
+                  encoding="utf-8"
+              )
+          )["version"]
+          if project_version != manifest_version:
+              raise SystemExit(
+                  "릴리스 버전이 일치하지 않습니다: "
+                  f"pyproject.toml={project_version}, "
+                  f"플러그인 매니페스트={manifest_version}"
+              )
+
+          tag = f"v{project_version}"
+          remote = subprocess.run(
+              [
+                  "git",
+                  "ls-remote",
+                  "--exit-code",
+                  "--tags",
+                  "origin",
+                  f"refs/tags/{tag}",
+              ],
+              capture_output=True,
+              text=True,
+              check=False,
+          )
+          if remote.returncode == 0:
+              should_release = "false"
+          elif remote.returncode == 2:
+              should_release = "true"
+          else:
+              raise SystemExit(
+                  remote.stderr.strip() or f"원격 태그 조회 실패: {remote.returncode}"
+              )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"release_tag={tag}\n")
+              output.write(f"release_version={project_version}\n")
+              output.write(f"should_release={should_release}\n")
+          print(f"릴리스 태그: {tag}, 게시 필요: {should_release}")
+          PY
+
   verify:
-    name: 태그 소스 검증
+    name: 릴리스 소스 검증
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}/src
@@ -37,42 +114,15 @@ jobs:
         run: python "$CODEX_PLUGIN_VALIDATOR" plugins/codex-compressor
       - name: 플러그인 런타임 동기화 확인
         run: python tools/sync_plugin_runtime.py --check
-      - name: 태그·패키지 버전 일치 확인
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          python - "$RELEASE_TAG" <<'PY'
-          from pathlib import Path
-          import json
-          import sys
-          import tomllib
-
-          tag = sys.argv[1]
-          if not tag.startswith("v"):
-              raise SystemExit(f"v 접두사가 없는 릴리스 태그입니다: {tag}")
-          tag_version = tag[1:]
-          project_version = tomllib.loads(
-              Path("pyproject.toml").read_text(encoding="utf-8")
-          )["project"]["version"]
-          manifest_version = json.loads(
-              Path("plugins/codex-compressor/.codex-plugin/plugin.json").read_text(
-                  encoding="utf-8"
-              )
-          )["version"]
-          versions = {
-              "태그": tag_version,
-              "pyproject.toml": project_version,
-              "플러그인 매니페스트": manifest_version,
-          }
-          if len(set(versions.values())) != 1:
-              details = ", ".join(f"{name}={value}" for name, value in versions.items())
-              raise SystemExit(f"릴리스 버전이 일치하지 않습니다: {details}")
-          print(f"릴리스 버전 확인: {tag_version}")
-          PY
 
   release:
-    name: 태그 릴리스 보관 및 게시
-    needs: verify
+    name: 릴리스 보관 및 게시
+    needs:
+      - prepare
+      - verify
+    if: >-
+      needs.prepare.outputs.should_release == 'true' &&
+      needs.verify.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,11 +135,11 @@ jobs:
           python-version: "3.13"
       - name: 배포물 만들기
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
         shell: bash
         run: |
           set -euo pipefail
-          version="${RELEASE_TAG#v}"
+          version="$RELEASE_VERSION"
           mkdir -p dist/release dist/plugin
           python - "$version" <<'PY'
           from pathlib import Path
@@ -148,16 +198,42 @@ jobs:
               for path in sorted(plugin_files):
                   archive.write(path, path.relative_to(root))
           PY
+      - name: 릴리스 본문 만들기
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.release_version }}
+        run: python tools/release_notes.py "$RELEASE_VERSION" dist/RELEASE_NOTES.md
       - name: SHA-256 체크섬 만들기
         shell: bash
         run: |
           set -euo pipefail
           (cd dist && find release plugin -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+      - name: 최신 main 커밋 확인
+        id: head
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_head="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [[ -z "$remote_head" ]]; then
+            echo "원격 main 커밋을 확인하지 못했습니다." >&2
+            exit 1
+          fi
+          if [[ "$remote_head" == "$GITHUB_SHA" ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "더 최신 main 실행이 있으므로 이 릴리스 게시를 건너뜁니다."
+          fi
       - name: GitHub 릴리스 게시
+        if: steps.head.outputs.should_publish == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ needs.prepare.outputs.release_tag }}
+          body_path: dist/RELEASE_NOTES.md
           files: |
             dist/release/*
             dist/plugin/*
             dist/SHA256SUMS
-          generate_release_notes: true
+          fail_on_unmatched_files: true
+          generate_release_notes: false

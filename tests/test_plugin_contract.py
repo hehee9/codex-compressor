@@ -38,6 +38,22 @@ class PluginContractTests(unittest.TestCase):
         self.assertNotIn("apps", manifest)
         self.assertEqual(len(manifest["interface"]["defaultPrompt"]), 3)
 
+    def test_package_cli_version_matches_project(self) -> None:
+        project = tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(REPOSITORY_ROOT / "src")
+        result = subprocess.run(
+            [sys.executable, "-m", "codex_compressor", "--version"],
+            cwd=REPOSITORY_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), project["project"]["version"])
+
     def test_marketplace_uses_local_plugin_contract(self) -> None:
         marketplace = json.loads(MARKETPLACE_PATH.read_text(encoding="utf-8"))
         canonical = json.loads(CANONICAL_MARKETPLACE_PATH.read_text(encoding="utf-8"))
