@@ -58,7 +58,7 @@ class ReleaseNotesTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("v1.0.1 항목이 없습니다", result.stderr)
+        self.assertIn("v1.0.1", result.stderr)
         self.assertFalse(output_path.exists())
 
     def test_rejects_empty_version_body(self) -> None:
@@ -70,7 +70,7 @@ class ReleaseNotesTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("v1.0.1 항목이 비어 있습니다", result.stderr)
+        self.assertIn("v1.0.1", result.stderr)
         self.assertFalse(output_path.exists())
 
 

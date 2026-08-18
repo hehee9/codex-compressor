@@ -1,20 +1,26 @@
 name: 버전 릴리스
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
+  group: release-${{ github.workflow }}-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
 jobs:
   prepare:
     name: 릴리스 버전 확인
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.metadata.outputs.release_tag }}
@@ -23,6 +29,8 @@ jobs:
     steps:
       - name: 저장소 가져오기
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: Python 준비
         uses: actions/setup-python@v5
         with:
@@ -95,6 +103,8 @@ jobs:
     steps:
       - name: 저장소 가져오기
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: 공식 플러그인 검증기 가져오기
         uses: actions/checkout@v4
         with:
@@ -129,6 +139,8 @@ jobs:
     steps:
       - name: 저장소 가져오기
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: Python 준비
         uses: actions/setup-python@v5
         with:
@@ -217,7 +229,7 @@ jobs:
             echo "원격 main 커밋을 확인하지 못했습니다." >&2
             exit 1
           fi
-          if [[ "$remote_head" == "$GITHUB_SHA" ]]; then
+          if [[ "$remote_head" == "${{ github.event.workflow_run.head_sha }}" ]]; then
             echo "should_publish=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_publish=false" >> "$GITHUB_OUTPUT"
@@ -228,7 +240,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.release_tag }}
-          target_commitish: ${{ github.sha }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
           name: ${{ needs.prepare.outputs.release_tag }}
           body_path: dist/RELEASE_NOTES.md
           files: |
