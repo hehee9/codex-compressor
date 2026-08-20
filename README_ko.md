@@ -85,6 +85,10 @@ Windows PowerShell:
 .\install.ps1 uninstall
 ```
 
+## 알려진 제한 사항
+
+- 서브 에이전트는 `SessionStart(compact)` 훅이 호출되지 않아 컨텍스트 압축 시 이전 컨텍스트를 잃을 수 있습니다. ([#35935](https://github.com/openai/codex/issues/35935), [#17148](https://github.com/openai/codex/issues/17148))
+
 ## 라이선스
 
 [Apache License 2.0](LICENSE)에 따라 배포됩니다. Copyright 2026 hehee9.

@@ -85,6 +85,10 @@ Windows PowerShell:
 .\install.ps1 uninstall
 ```
 
+## Known limitation
+
+- Sub-agents may lose their previous context during compaction because the `SessionStart(compact)` hook is not called. ([#35935](https://github.com/openai/codex/issues/35935), [#17148](https://github.com/openai/codex/issues/17148))
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 hehee9.
